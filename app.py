@@ -36,11 +36,11 @@ def overlay_image(background_frame, overlay_img, x, y, w, h):
     y1, y2 = max(0, y), min(background_frame.shape[0], y + h)
     x1, x2 = max(0, x), min(background_frame.shape[1], x + w)
     overlay = overlay[0:y2-y1, 0:x2-x1]
-    
+
     alpha_s = overlay[:, :, 3] / 255.0
     alpha_l = 1.0 - alpha_s
     bg_slice = background_frame[y1:y2, x1:x2]
-    
+
     for c in range(0, 3):
         bg_slice[:, :, c] = (alpha_s * overlay[:, :, c] + alpha_l * bg_slice[:, :, c])
     return background_frame
@@ -73,9 +73,7 @@ def parse_config(config_content_bytes):
 # 核心處理邏輯 (保持不變)
 # -------------------------
 def process_video(video_path, frame_map, overlay_path=None):
-    # ... (此處程式碼與前面版本相同，不重複貼出以節省篇幅) ...
-    # 由於篇幅限制，請沿用您前一版本的 process_video 函式內容
-    
+    # 1. 嘗試讀取疊圖 (如果有傳入路徑)
     subscribe_img = None
     if overlay_path:
         subscribe_img = cv2.imread(overlay_path, cv2.IMREAD_UNCHANGED)
@@ -87,8 +85,28 @@ def process_video(video_path, frame_map, overlay_path=None):
     fps = cap.get(cv2.CAP_PROP_FPS)
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    total_frames_in_video = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
+    # 【新增邏輯】確定座標檔的最大幀數
+    if frame_map:
+        # frame_map 的 key 就是幀數 (從 0 或 1 開始)
+        max_frame_index = max(frame_map.keys())
+    else:
+        # 如果 frame_map 是空的，則無處理幀，直接結束
+        st.error("設定檔內容為空，沒有需要處理的幀數！")
+        cap.release()
+        return None
+
+    # 【關鍵設定】設定最終處理的幀數上限
+    # 如果影片比設定檔長，我們只處理到 max_frame_index + 1 (因為 range 是 exclusive)
+    # 我們讓 final_frame_limit 等於設定檔的最大幀數 (例如 276)
+    final_frame_limit = max_frame_index
+
+    st.info(f"影片總幀數: {total_frames_in_video} 幀。座標檔最大幀數: {max_frame_index} 幀。")
+    if total_frames_in_video > final_frame_limit:
+        st.warning(f"影片將強制截斷到座標檔的最後一幀 ({final_frame_limit} 幀)，多餘的幀數將被忽略。")
+
+    # 建立臨時輸出檔
     tfile_out = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
     tmp_video_path = tfile_out.name
     tfile_out.close()
@@ -106,7 +124,9 @@ def process_video(video_path, frame_map, overlay_path=None):
 
     while True:
         ret, frame = cap.read()
-        if not ret:
+
+        # 【新增邏輯】達到設定檔上限或影片結束時，跳出迴圈
+        if not ret or frame_idx > final_frame_limit:
             break
 
         if frame_idx in frame_map:
@@ -122,22 +142,26 @@ def process_video(video_path, frame_map, overlay_path=None):
                 mask[y1:y2, x1:x2] = 255
 
             clean_frame = cv2.inpaint(processed_frame, mask, inpaint_radius, cv2.INPAINT_TELEA)
-            
+
             if subscribe_img is not None:
                 for (x, y, w, h) in bboxes:
                     clean_frame = overlay_image(clean_frame, subscribe_img, x, y, w, h)
-            
+
             out.write(clean_frame)
         else:
+            # 沒處理資訊的幀，直接寫入 (只在 final_frame_limit 內有效)
             out.write(frame)
 
         frame_idx += 1
+        # 更新進度條：以設定檔的最大幀數為 100%
         if frame_idx % 10 == 0:
-            progress_bar.progress(min(frame_idx / total_frames, 1.0))
-            status_text.text(f"處理進度: {int(frame_idx/total_frames*100)}%")
+            progress_bar.progress(min(frame_idx / final_frame_limit, 1.0))
+            status_text.text(f"處理進度: {int(frame_idx/final_frame_limit*100)}% (目標 {final_frame_limit} 幀)")
 
     cap.release()
     out.release()
+
+    progress_bar.progress(1.0) # 確保進度條達到 100%
 
     status_text.text("影像處理完成，正在合併音訊...")
     try:
@@ -149,7 +173,7 @@ def process_video(video_path, frame_map, overlay_path=None):
             "-c:a", "aac",
             "-map", "0:v:0",
             "-map", "1:a:0",
-            "-shortest",
+            "-shortest", # <-- 確保以最短 (即我們處理後的影片) 為準
             tmp_video_path
         ]
         subprocess.run(cmd, check=True)
@@ -169,14 +193,14 @@ def main():
     st.markdown("上傳影片，並選擇預載的座標設定檔 (LU/LD/RU/RD)。**只支援9:16,10s**")
 
     temp_paths = []
-    
+
     with st.form("upload_form"):
         # 1. 影片和圖片
         video_file = st.file_uploader("1. 上傳影片 (MP4)", type=["mp4", "mov", "avi"])
         overlay_file = st.file_uploader("2. (選填) 上傳去背圖 (PNG)", type=["png"])
 
         st.subheader("3. 浮水印座標(浮水印起始位置L:左,U:上")
-        
+
         # 移除檔案上傳欄位，改用選擇
         selected_key = st.selectbox(
             "請選擇要套用哪一個座標配置檔：",
@@ -184,7 +208,7 @@ def main():
             index=0
         )
         st.caption("設定檔 (LU.txt, LD.txt等) 已經預先部署在伺服器上。")
-        
+
         submitted = st.form_submit_button("開始處理")
 
     if submitted:
@@ -196,15 +220,15 @@ def main():
             if selected_key == "--- 請選擇 ---":
                 st.error("請選擇一個座標配置檔 (LU/LD/RU/RD)！")
                 return
-            
+
             # --- 核心修改：讀取伺服器上的靜態檔案 ---
             config_server_path = CONFIG_PATHS.get(selected_key)
-            
+
             if not os.path.exists(config_server_path):
                 # 如果找不到檔案，通常是忘了提交到 GitHub
                 st.error(f"❌ 錯誤：伺服器上找不到 [{selected_key}] 的設定檔 ({config_server_path})。請確認您已在 GitHub 提交了 /configs/{selected_key}.txt 檔案。")
                 return
-            
+
             # 從伺服器路徑讀取檔案內容
             with open(config_server_path, 'rb') as f:
                 config_content_bytes = f.read()
@@ -216,7 +240,7 @@ def main():
                 t_vid.write(video_file.read())
                 v_path = t_vid.name
                 temp_paths.append(v_path)
-            
+
             # 處理選填的圖片
             o_path = None
             if overlay_file:
@@ -227,16 +251,16 @@ def main():
 
             # 解析設定檔 (傳入 bytes 內容)
             frame_map = parse_config(config_content_bytes)
-            
+
             if frame_map:
                 result_path = process_video(v_path, frame_map, o_path)
-                
+
                 if result_path:
                     st.success("🎉 處理完成！請下載影片。")
                     with open(result_path, "rb") as f:
                         st.download_button("下載影片", f, file_name=f"clean_video_{selected_key}.mp4")
                     temp_paths.append(result_path)
-            
+
         except Exception as e:
             st.exception(e)
             st.error("處理過程中發生未知錯誤。")
@@ -248,6 +272,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
