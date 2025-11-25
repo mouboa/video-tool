@@ -175,7 +175,7 @@ def main():
         video_file = st.file_uploader("1. 上傳影片 (MP4)", type=["mp4", "mov", "avi"])
         overlay_file = st.file_uploader("2. (選填) 上傳去背圖 (PNG)", type=["png"])
 
-        st.subheader("3. 座標設定檔選取(浮水印起始位置L:左,U:上")
+        st.subheader("3. 浮水印座標(浮水印起始位置L:左,U:上")
         
         # 移除檔案上傳欄位，改用選擇
         selected_key = st.selectbox(
@@ -248,4 +248,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
