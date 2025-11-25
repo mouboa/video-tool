@@ -1,4 +1,4 @@
 streamlit
-opencv-python-headless # 推薦使用 headless 版本
-numpy
+opencv-python-headless
 pillow
+
