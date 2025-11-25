@@ -7,10 +7,20 @@ import tempfile
 from PIL import Image
 
 # -------------------------
-# 圖像疊加函式
+# 【核心修改】定義靜態設定檔的路徑
+# -------------------------
+CONFIG_PATHS = {
+    "LU": "configs/LU.txt",
+    "LD": "configs/LD.txt",
+    "RU": "configs/RU.txt",
+    "RD": "configs/RD.txt",
+}
+
+
+# -------------------------
+# 圖像疊加函式 (保持不變)
 # -------------------------
 def overlay_image(background_frame, overlay_img, x, y, w, h):
-    # 如果沒有傳入疊圖，直接回傳原背景
     if overlay_img is None:
         return background_frame
 
@@ -25,25 +35,24 @@ def overlay_image(background_frame, overlay_img, x, y, w, h):
 
     y1, y2 = max(0, y), min(background_frame.shape[0], y + h)
     x1, x2 = max(0, x), min(background_frame.shape[1], x + w)
-
-    # 確保疊加圖片尺寸與目標區域匹配
     overlay = overlay[0:y2-y1, 0:x2-x1]
-
+    
     alpha_s = overlay[:, :, 3] / 255.0
     alpha_l = 1.0 - alpha_s
     bg_slice = background_frame[y1:y2, x1:x2]
-
+    
     for c in range(0, 3):
         bg_slice[:, :, c] = (alpha_s * overlay[:, :, c] + alpha_l * bg_slice[:, :, c])
     return background_frame
 
 # -------------------------
-# 解析設定檔
+# 解析設定檔 (參數從檔案物件改為檔案內容 bytes)
 # -------------------------
-def parse_config(config_content):
+def parse_config(config_content_bytes):
     frame_map = {}
     try:
-        lines = config_content.decode("utf-8-sig").splitlines()
+        # 直接使用傳入的 bytes 內容
+        lines = config_content_bytes.decode("utf-8-sig").splitlines()
         for line in lines:
             line = line.strip()
             if not line or not line[0].isdigit():
@@ -61,16 +70,18 @@ def parse_config(config_content):
         return None
 
 # -------------------------
-# 核心處理邏輯 (修改：overlay_path 可為 None)
+# 核心處理邏輯 (保持不變)
 # -------------------------
 def process_video(video_path, frame_map, overlay_path=None):
-    # 1. 嘗試讀取疊圖 (如果有傳入路徑)
+    # ... (此處程式碼與前面版本相同，不重複貼出以節省篇幅) ...
+    # 由於篇幅限制，請沿用您前一版本的 process_video 函式內容
+    
     subscribe_img = None
     if overlay_path:
         subscribe_img = cv2.imread(overlay_path, cv2.IMREAD_UNCHANGED)
         if subscribe_img is None or subscribe_img.shape[2] != 4:
             st.warning("注意：疊圖檔案格式錯誤或是無 Alpha 通道，將略過疊圖步驟，僅執行去浮水印。")
-            subscribe_img = None # 強制設為 None
+            subscribe_img = None
 
     cap = cv2.VideoCapture(video_path)
     fps = cap.get(cv2.CAP_PROP_FPS)
@@ -110,14 +121,12 @@ def process_video(video_path, frame_map, overlay_path=None):
                 y2 = min(height, y + h + padding)
                 mask[y1:y2, x1:x2] = 255
 
-            # 1. 先去浮水印 (Inpaint)
             clean_frame = cv2.inpaint(processed_frame, mask, inpaint_radius, cv2.INPAINT_TELEA)
-
-            # 2. 如果有圖片，才執行疊加
+            
             if subscribe_img is not None:
                 for (x, y, w, h) in bboxes:
                     clean_frame = overlay_image(clean_frame, subscribe_img, x, y, w, h)
-
+            
             out.write(clean_frame)
         else:
             out.write(frame)
@@ -150,53 +159,92 @@ def process_video(video_path, frame_map, overlay_path=None):
         st.error(f"FFmpeg 合併失敗: {e}")
         return temp_silent
 
+
 # -------------------------
-# 網頁介面主程式
+# 網頁介面主程式 (主要修改區)
 # -------------------------
 def main():
     st.set_page_config(page_title="影片去水印工具", layout="centered")
-    st.title("🎬 影片去浮水印工具 (純淨版)")
-    st.markdown("上傳影片與座標設定檔 (TXT)。**圖片為選填**，若不傳圖片則單純去除浮水印。")
+    st.title("🎬 影片去浮水印工具 (預載配置版)")
+    st.markdown("上傳影片，並選擇預載的座標設定檔 (LU/LD/RU/RD)。**無需再次上傳 TXT 檔。**")
 
+    temp_paths = []
+    
     with st.form("upload_form"):
+        # 1. 影片和圖片
         video_file = st.file_uploader("1. 上傳影片 (MP4)", type=["mp4", "mov", "avi"])
-        config_file = st.file_uploader("2. 上傳座標設定檔 (TXT)", type=["txt"])
-        overlay_file = st.file_uploader("3. (選填) 上傳疊圖", type=["png"]) # 標記為選填
+        overlay_file = st.file_uploader("2. (選填) 上傳疊圖 (PNG)", type=["png"])
 
+        st.subheader("3. 座標設定檔選取")
+        
+        # 移除檔案上傳欄位，改用選擇
+        selected_key = st.selectbox(
+            "請選擇要套用哪一個座標配置檔：",
+            options=["--- 請選擇 ---", "LU", "LD", "RU", "RD"],
+            index=0
+        )
+        st.caption("設定檔 (LU.txt, LD.txt等) 已經預先部署在伺服器上。")
+        
         submitted = st.form_submit_button("開始處理")
 
     if submitted:
-        # 修改判斷條件：只要有 影片 和 設定檔 即可
-        if video_file and config_file:
+        try:
+            # 檢查必填項目
+            if not video_file:
+                st.error("請上傳影片！")
+                return
+            if selected_key == "--- 請選擇 ---":
+                st.error("請選擇一個座標配置檔 (LU/LD/RU/RD)！")
+                return
+            
+            # --- 核心修改：讀取伺服器上的靜態檔案 ---
+            config_server_path = CONFIG_PATHS.get(selected_key)
+            
+            if not os.path.exists(config_server_path):
+                # 如果找不到檔案，通常是忘了提交到 GitHub
+                st.error(f"❌ 錯誤：伺服器上找不到 [{selected_key}] 的設定檔 ({config_server_path})。請確認您已在 GitHub 提交了 /configs/{selected_key}.txt 檔案。")
+                return
+            
+            # 從伺服器路徑讀取檔案內容
+            with open(config_server_path, 'rb') as f:
+                config_content_bytes = f.read()
 
+            st.info(f"✅ 已選定：影片、疊圖 ({'已上傳' if overlay_file else '未上傳'})、預載座標檔 [{selected_key}]")
+
+            # 儲存上傳的檔案到暫存區
             with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as t_vid:
                 t_vid.write(video_file.read())
                 v_path = t_vid.name
-
+                temp_paths.append(v_path)
+            
             # 處理選填的圖片
             o_path = None
             if overlay_file:
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as t_img:
                     t_img.write(overlay_file.read())
                     o_path = t_img.name
+                    temp_paths.append(o_path)
 
-            frame_map = parse_config(config_file.getvalue())
-
+            # 解析設定檔 (傳入 bytes 內容)
+            frame_map = parse_config(config_content_bytes)
+            
             if frame_map:
-                # 傳入路徑 (o_path 可能為 None)
                 result_path = process_video(v_path, frame_map, o_path)
-
+                
                 if result_path:
-                    st.success("處理完成！請下載影片。")
+                    st.success("🎉 處理完成！請下載影片。")
                     with open(result_path, "rb") as f:
-                        st.download_button("下載影片", f, file_name="clean_video.mp4")
-                    os.remove(result_path)
-
-            os.remove(v_path)
-            if o_path:
-                os.remove(o_path)
-        else:
-            st.error("請至少上傳「影片」和「座標設定檔」！")
+                        st.download_button("下載影片", f, file_name=f"clean_video_{selected_key}.mp4")
+                    temp_paths.append(result_path)
+            
+        except Exception as e:
+            st.exception(e)
+            st.error("處理過程中發生未知錯誤。")
+        finally:
+            # 清理所有暫存檔案
+            for path in temp_paths:
+                if os.path.exists(path):
+                    os.remove(path)
 
 if __name__ == "__main__":
     main()
