@@ -1,5 +1,4 @@
-# OpenCV 運行所必需的系統函式庫
 libgl1
 libsm6
 libxext6
-ffmpeg # 確保這個也在，因為你的程式需要合併音訊
+ffmpeg
