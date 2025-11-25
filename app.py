@@ -165,8 +165,8 @@ def process_video(video_path, frame_map, overlay_path=None):
 # -------------------------
 def main():
     st.set_page_config(page_title="影片去水印工具", layout="centered")
-    st.title("🎬 影片去浮水印工具 (預載配置版)")
-    st.markdown("上傳影片，並選擇預載的座標設定檔 (LU/LD/RU/RD)。**無需再次上傳 TXT 檔。**")
+    st.title("🎬 影片去浮水印工具 (Sora版)")
+    st.markdown("上傳影片，並選擇預載的座標設定檔 (LU/LD/RU/RD)。**只支援9:16,10s**")
 
     temp_paths = []
     
@@ -248,5 +248,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
